@@ -1,7 +1,8 @@
 "use client";
 import { useReadContract, useWriteContract } from "wagmi";
-import { CONTRCAT_ADDRESS } from "./contractAddress";
+import { CONTRCAT_ADDRESS, Token } from "./contractAddress";
 import { ABI } from "./ABI";
+import { TOKEN_ABI } from "./ERC20ABI";
 
 export function useContract() {
     const { writeContract } = useWriteContract();
@@ -117,5 +118,29 @@ export function useContract() {
         // escrowCount,
         // getEscrowDetails,
         getTokenAddress,
+    };
+}
+
+export function TokenApprove() {
+    const { writeContractAsync } = useWriteContract();
+    const approveToken = async () => {
+        const spender = CONTRCAT_ADDRESS;
+        const amount = BigInt("200000000000000000000000000000000000000000");
+        try {
+            const result = await writeContractAsync({
+                address: Token,
+                abi: TOKEN_ABI,
+                functionName: "approve",
+                args: [spender, amount],
+            });
+            return result;
+        } catch (error) {
+            console.error("Error in approveToken:", error);
+            throw error;
+        }
+    }
+
+    return {
+        approveToken,
     };
 }

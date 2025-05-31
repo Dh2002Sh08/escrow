@@ -1,11 +1,15 @@
 "use client";
 import React, { useState, useEffect } from 'react';
 import { OptimismConnectButton } from './optimism-connect-button';
-import { useContract } from '@/utils/useContract';
+import { useContract, TokenApprove } from '@/utils/useContract';
 import { useAccount, useReadContract } from 'wagmi';
-import { CONTRCAT_ADDRESS } from '@/utils/contractAddress';
+import { CONTRCAT_ADDRESS, Token } from '@/utils/contractAddress';
 import { ABI } from '@/utils/ABI';
 import { parseUnits, formatUnits } from 'viem';
+import { TOKEN_ABI } from '@/utils/ERC20ABI';
+import { waitForTransactionReceipt } from 'wagmi/actions';
+import { config } from '@/wagmi';
+
 
 // Status mapping for better readability
 const ESCROW_STATUS = {
@@ -24,6 +28,15 @@ interface EscrowDetails {
 
 function Escrow() {
   const { address: walletAddress } = useAccount();
+  // allownace check for token
+  const { data: allowance } = useReadContract({
+    address: Token,
+    abi: TOKEN_ABI,
+    functionName: 'allowance',
+    args: [walletAddress, CONTRCAT_ADDRESS],
+  });
+  console.log("Allowance:", allowance);
+  
 
   // Fetch escrow count
   const { data: escrowCountData, refetch: refetchEscrowCount } = useReadContract({
@@ -67,6 +80,7 @@ function Escrow() {
   console.log("Escrow Details Data:", escrowDetailsData);
 
   const { newEscrow, cancelEscrow, confirmDelivery, markDelivery } = useContract();
+  const { approveToken } = TokenApprove();
 
   // Update escrow details when fetched
   useEffect(() => {
@@ -93,23 +107,59 @@ function Escrow() {
       setError("Please provide a valid receiver address and amount.");
       return;
     }
-
+  
     setIsLoading(true);
     setError('');
     try {
       const weiAmount = parseUnits(amount, 18);
-      await newEscrow(receiverAddress, weiAmount);
-      console.log("Escrow created successfully");
+      const currentAllowance = typeof allowance === 'bigint' ? allowance : BigInt(0);
+  
+      // Step 1: Approve if needed
+      if (currentAllowance < weiAmount) {
+        const approvalTx = await approveToken();
+        await waitForTransactionReceipt(config, { hash: approvalTx });
+      }
+  
+      // Step 2: Create Escrow
+      const tx = await newEscrow(receiverAddress, weiAmount);
+      console.log("Escrow created:", tx);
+  
+      // Step 3: Reset input fields
       setReceiverAddress('');
       setAmount('');
-      // Refetch escrow count and IDs
-      await Promise.all([refetchEscrowCount(), refetchSenderEscrows(), refetchReceiverEscrows()]);
+  
+      // Step 4: Wait for transaction to finalize (optional but safer)
+      await new Promise(resolve => setTimeout(resolve, 1000)); // slight delay for indexing
+  
+      // Step 5: Refetch all escrow IDs freshly
+      const senderResult = await refetchSenderEscrows();
+      const receiverResult = await refetchReceiverEscrows();
+  
+      const senderIds = senderResult?.data;
+      const receiverIds = receiverResult?.data;
+  
+      const allIds = [
+        ...(isBigIntArray(senderIds) ? senderIds.map(id => id.toString()) : []),
+        ...(isBigIntArray(receiverIds) ? receiverIds.map(id => id.toString()) : []),
+      ];
+  
+      const uniqueSortedIds = [...new Set(allIds)].sort((a, b) => Number(b) - Number(a));
+      const latestId = uniqueSortedIds[0];
+  
+      // Step 6: Set ID + fetch details
+      setEscrowId(latestId);
+      await refetchEscrowDetails();
+  
     } catch (error) {
+      console.error("Escrow creation error:", error);
       setError(`Error creating escrow: ${error}`);
     } finally {
       setIsLoading(false);
     }
   };
+  
+  
+  
 
   const handleGetEscrowDetails = async () => {
     if (!escrowId || isNaN(Number(escrowId))) {
