@@ -149,6 +149,7 @@ function Escrow() {
       // Step 6: Set ID + fetch details
       setEscrowId(latestId);
       await refetchEscrowDetails();
+      refetchEscrowCount();
   
     } catch (error) {
       console.error("Escrow creation error:", error);
