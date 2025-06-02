@@ -9,7 +9,6 @@ import { parseUnits, formatUnits } from 'viem';
 import { TOKEN_ABI } from '@/utils/ERC20ABI';
 import { waitForTransactionReceipt } from 'wagmi/actions';
 import { config } from '@/wagmi';
-import Link from 'next/link';
 
 
 // Status mapping for better readability
@@ -37,7 +36,7 @@ function Escrow() {
     args: [walletAddress, CONTRCAT_ADDRESS],
   });
   console.log("Allowance:", allowance);
-  
+
 
   // Fetch escrow count
   const { data: escrowCountData, refetch: refetchEscrowCount } = useReadContract({
@@ -69,6 +68,7 @@ function Escrow() {
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [error, setError] = useState<string>('');
+  const [isApproved, setIsApproved] = useState(false);
 
   // Fetch escrow details for a specific ID
   const { data: escrowDetailsData, refetch: refetchEscrowDetails } = useReadContract({
@@ -77,7 +77,7 @@ function Escrow() {
     functionName: "escrows",
     args: [escrowId ? BigInt(escrowId) : 0],
     query: { enabled: !!escrowId },
-  }); 
+  });
   console.log("Escrow Details Data:", escrowDetailsData);
 
   const { newEscrow, cancelEscrow, confirmDelivery, markDelivery } = useContract();
@@ -92,66 +92,89 @@ function Escrow() {
       setEscrowDetails(null);
     }
   }, [escrowDetailsData]);
-  
+
   // Combine sender and receiver escrow IDs
   function isBigIntArray(value: unknown): value is bigint[] {
     return Array.isArray(value) && value.every((item) => typeof item === 'bigint');
   }
-  
+
   const userEscrowIds = [
     ...(isBigIntArray(senderEscrowIds) ? senderEscrowIds.map((id: bigint) => id.toString()) : []),
     ...(isBigIntArray(receiverEscrowIds) ? receiverEscrowIds.map((id: bigint) => id.toString()) : []),
   ].filter((value, index, self) => self.indexOf(value) === index); // Remove duplicates
+
+  useEffect(() => {
+    const checkApproval = () => {
+      const weiAmount = parseUnits(amount || "0", 18);
+      setIsApproved(allowance && typeof allowance === 'bigint' && allowance >= weiAmount);
+    };
+    checkApproval();
+  }, [allowance, amount]);
+
+  const handleApprove = async () => {
+    setIsLoading(true);
+    setError('');
+    try {
+      const approvalTx = await approveToken();
+      await waitForTransactionReceipt(config, { hash: approvalTx });
+      setIsApproved(true);
+    } catch (err) {
+      console.error("Approval error:", err);
+      setError("Token approval failed.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleCreateEscrow = async () => {
     if (!receiverAddress || !amount) {
       setError("Please provide a valid receiver address and amount.");
       return;
     }
-  
+
     setIsLoading(true);
     setError('');
     try {
       const weiAmount = parseUnits(amount, 18);
-      const currentAllowance = typeof allowance === 'bigint' ? allowance : BigInt(0);
-  
-      // Step 1: Approve if needed
-      if (currentAllowance < weiAmount) {
-        const approvalTx = await approveToken();
-        await waitForTransactionReceipt(config, { hash: approvalTx });
-      }
-  
+      // const currentAllowance = typeof allowance === 'bigint' ? allowance : BigInt(0);
+
+      // // Step 1: Approve if needed
+      // if (currentAllowance < weiAmount) {
+      //   const approvalTx = await approveToken();
+      //   await waitForTransactionReceipt(config, { hash: approvalTx });
+      // }
+
       // Step 2: Create Escrow
       const tx = await newEscrow(receiverAddress, weiAmount);
       console.log("Escrow created:", tx);
-  
+
       // Step 3: Reset input fields
       setReceiverAddress('');
       setAmount('');
-  
+
       // Step 4: Wait for transaction to finalize (optional but safer)
       await new Promise(resolve => setTimeout(resolve, 1000)); // slight delay for indexing
-  
+
       // Step 5: Refetch all escrow IDs freshly
       const senderResult = await refetchSenderEscrows();
       const receiverResult = await refetchReceiverEscrows();
-  
+
       const senderIds = senderResult?.data;
       const receiverIds = receiverResult?.data;
-  
+
       const allIds = [
         ...(isBigIntArray(senderIds) ? senderIds.map(id => id.toString()) : []),
         ...(isBigIntArray(receiverIds) ? receiverIds.map(id => id.toString()) : []),
       ];
-  
+
       const uniqueSortedIds = [...new Set(allIds)].sort((a, b) => Number(b) - Number(a));
       const latestId = uniqueSortedIds[0];
-  
+
       // Step 6: Set ID + fetch details
       setEscrowId(latestId);
       await refetchEscrowDetails();
       refetchEscrowCount();
-  
+
     } catch (error) {
       console.error("Escrow creation error:", error);
       setError(`Error creating escrow: ${error}`);
@@ -159,9 +182,9 @@ function Escrow() {
       setIsLoading(false);
     }
   };
-  
-  
-  
+
+
+
 
   const handleGetEscrowDetails = async () => {
     if (!escrowId || isNaN(Number(escrowId))) {
@@ -246,12 +269,6 @@ function Escrow() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-100 dark:from-gray-900 dark:via-gray-950 dark:to-black py-10 px-4 sm:px-6 lg:px-8 text-gray-900 dark:text-white">
-      <Link 
-          href="/"
-          className="absolute top-4 right-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
-        >
-          Dashboard
-        </Link>
       <div className="max-w-4xl mx-auto bg-white/90 dark:bg-gray-900 backdrop-blur-xl rounded-2xl shadow-2xl p-8 ring-1 ring-gray-200 dark:ring-gray-700">
         <div className="flex justify-between items-center mb-10">
           <h1 className="text-4xl font-extrabold text-gray-900 dark:text-white">Escrow System</h1>
@@ -298,15 +315,28 @@ function Escrow() {
                 className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white text-black placeholder-gray-500 shadow-inner focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 px-4 py-3 transition"
               />
             </div>
+
+            {!isApproved && (
+              <button
+                onClick={handleApprove}
+                disabled={isLoading || !amount}
+                className="w-full bg-yellow-500 text-white py-3 px-4 rounded-xl hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:ring-offset-2 disabled:opacity-50 transition duration-200 transform hover:scale-105"
+              >
+                {isLoading ? 'Approving...' : 'Approve Token'}
+              </button>
+            )}
+
             <button
               onClick={handleCreateEscrow}
-              disabled={isLoading}
-              className="w-full bg-indigo-600 text-white py-3 px-4 rounded-xl hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 transition duration-200 transform hover:scale-105"
+              disabled={isLoading || !isApproved || !receiverAddress || !amount}
+              className={`w-full ${isApproved ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-gray-400'
+                } text-white py-3 px-4 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 transition duration-200 transform hover:scale-105`}
             >
-              {isLoading ? 'Creating...' : 'Create Escrow'}
+              {isLoading ? 'Creating Escrow...' : 'Create Escrow'}
             </button>
           </div>
         </div>
+
 
         {/* Escrow Operations Section */}
         <div className="p-6 border border-gray-200 dark:border-gray-700 rounded-2xl bg-gradient-to-br from-white to-gray-100 dark:from-gray-900 dark:to-gray-800 shadow-sm">
